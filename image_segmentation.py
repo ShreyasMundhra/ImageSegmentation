@@ -1,109 +1,18 @@
-
-# coding: utf-8
-
-# In[1]:
-
-
-# import numpy as np
 import skimage.io as io
-# import matplotlib.pyplot as plt
 
-from pycocotools.coco import COCO
-# from pycocotools.cocoeval import COCOeval
-
-# from pycocotools.mask import decode, encode
-
-import tensorflow as tf
-
-# import keras
 from keras import backend as K
-
-from keras.models import Sequential, Model
-from keras.layers import Conv2DTranspose, ZeroPadding2D, UpSampling2D, Add, Reshape, BatchNormalization
-from keras.layers.core import Dense, Activation, Flatten
-from keras.layers.convolutional import Conv2D
-# from keras.layers.pooling import MaxPooling2D
+from keras.models import load_model, Model
+from keras.layers import Conv2DTranspose, ZeroPadding2D, Add, Reshape, BatchNormalization
+from keras.layers.core import Activation
 
 from keras.losses import categorical_crossentropy
-
 from keras.callbacks import EarlyStopping, ModelCheckpoint
 
 from keras.applications.vgg19 import VGG19
 
-# from keras.applications.inception_v3 import InceptionV3
-
-# import cv2
-
+from pycocotools.coco import COCO
 from pycocotools.cocostuffeval import *
 from pycocotools.cocostuffhelper import *
-
-
-from segmentation_models import Unet
-
-
-# In[2]:
-
-
-print(K.tensorflow_backend._get_available_gpus())
-
-# from keras.backend.tensorflow_backend import set_session
-# config = tf.ConfigProto()
-# config.gpu_options.per_process_gpu_memory_fraction = 0.5
-# set_session(tf.Session(config=config))
-
-# K.set_floatx('float16')
-
-
-# # Data Preprocessing
-
-# In[3]:
-
-
-# annFile = 'annotations/stuff_val2017.json'
-# coco = COCO(annFile)
-
-
-# In[4]:
-
-
-# catIds = coco.getCatIds(catNms=['person', 'dog', 'skateboard'])
-# imgIds = coco.getImgIds(catIds=catIds)
-# imgIds = coco.getImgIds(imgIds = [324158])
-# img = coco.loadImgs(imgIds[np.random.randint(0, len(imgIds))])[0]
-
-
-# In[5]:
-
-
-# I = io.imread(img['coco_url'])
-# plt.imshow(I)
-# plt.show()
-
-
-# In[6]:
-
-
-# plt.imshow(I)
-# annIds = coco.getAnnIds(imgIds=img['id'], catIds=catIds, iscrowd=None)
-# anns = coco.loadAnns(annIds)
-# coco.showAnns(anns)
-
-
-# In[7]:
-
-
-# 0, 124, 169
-# single_stuff = np.zeros_like(labelMap)
-# single_stuff[labelMap == 124] = 255
-# conc = np.zeros((334, 500, 3))
-# conc[:, :, 0] = single_stuff
-# conc[:, :, 1] = single_stuff
-# conc[:, :, 2] = single_stuff
-# plt.imshow(conc)
-
-
-# In[8]:
-
 
 def get_ground_truth(coco, imgId, num_classes=92, class_start_id=92):
 	label_map = cocoSegmentationToSegmentationMap(coco, imgId, checkUniquePixelLabel=True)
@@ -113,141 +22,60 @@ def get_ground_truth(coco, imgId, num_classes=92, class_start_id=92):
 		ground_truth[:, :, i][label_map == class_start_id + i] = 1
 	return ground_truth
 
-
-# In[9]:
-
-
-# ground_truth = get_ground_truth(coco, 324158)
-# img = np.repeat(ground_truth[:, :, 77, np.newaxis], 3, axis=2)
-# img = img * 255
-# plt.imshow(img)
-
-
-# # Train model
-
-# In[10]:
-
-
-# def batch(directory, n=1):
-#     filenames = os.listdir(directory)
-#     l = len(filenames)
-#
-#     for ndx in range(0, l, n):
-#         imgs = []
-#         batch_files = filenames[ndx:min(ndx + n, l)]
-#         for filename in batch_files:
-#             imgs.append(io.imread(os.path.join(directory, filename)))
-#
-#         yield imgs
-
-
-# In[24]:
-
-
 def batch(coco, input_shape, n=32):
-#     if mode == 'train':
-#         annFile = 'annotations/stuff_train2017.json'
-#     elif mode == 'val':
-#         annFile = 'annotations/stuff_val2017.json'
-#     coco = COCO(annFile)
 	imgIds = coco.getImgIds()
 
 	l = len(imgIds)
+	for ndx in range(0, l, n):
+		batch_ids = imgIds[ndx:min(ndx + n, l)]
+		imgs_dict = coco.loadImgs(batch_ids)
 
-	with tf.device("/cpu:0"):
-		for ndx in range(0, l, n):
-			batch_ids = imgIds[ndx:min(ndx + n, l)]
-			imgs_dict = coco.loadImgs(batch_ids)
+		imgs = []
+		y = []
 
-			imgs = []
-			y = []
+		for i in range(len(batch_ids)):
+			img = imgs_dict[i]
+			imgId = batch_ids[i]
 
-			for i in range(len(batch_ids)):
-				img = imgs_dict[i]
-				imgId = batch_ids[i]
+			image = io.imread(img['coco_url'])
+			if len(image.shape) != 3:
+				image = np.asarray(np.dstack((image, image, image)), dtype=np.uint8)
 
-				image = io.imread(img['coco_url'])
-				reshaped = np.zeros((input_shape[0], input_shape[1], 3))
+			reshaped = np.zeros((input_shape[0], input_shape[1], 3))
 
-				cropped_h = min(image.shape[0], input_shape[0])
-				cropped_w = min(image.shape[1], input_shape[1])
-				#print("Here1")
-				reshaped[:cropped_h, :cropped_w] = image[:cropped_h, :cropped_w]
-				#print("Here2")
-				imgs.append(reshaped.tolist())
+			cropped_h = min(image.shape[0], input_shape[0])
+			cropped_w = min(image.shape[1], input_shape[1])
+			reshaped[:cropped_h, :cropped_w] = image[:cropped_h, :cropped_w]
+			imgs.append(reshaped.tolist())
 
-				gt = get_ground_truth(coco, imgId, num_classes=92, class_start_id=92)
-				reshaped_gt = np.zeros((input_shape[0], input_shape[1], gt.shape[2]))
-				#print(gt.shape, reshaped_gt.shape, cropped_h, cropped_w)
-				#print("Here3")
-				reshaped_gt[:cropped_h, :cropped_w] = gt[:cropped_h, :cropped_w]
-				#print("Here4")
+			gt = get_ground_truth(coco, imgId, num_classes=92, class_start_id=92)
+			reshaped_gt = np.zeros((input_shape[0], input_shape[1], gt.shape[2]))
+			reshaped_gt[:cropped_h, :cropped_w] = gt[:cropped_h, :cropped_w]
 
-				y.append(reshaped_gt.tolist())
-
-			yield np.array(imgs), np.array(y)
-
-# In[ ]:
-
-
-# train_gen = batch('val')
-# imgs, y = next(train_gen)
-# plt.imshow(imgs[0].astype('uint8'))
-# plt.show()
-# imgs, y = next(train_gen)
-# plt.imshow(imgs[0])
-# plt.show()
-# imgs, y = next(train_gen)
-# plt.imshow(imgs[0].astype('uint8'))
-# plt.show()
-# imgs, y = next(train_gen)
-# plt.imshow(imgs[0].astype('uint8'))
-# plt.show()
-
-
-# In[12]:
-
+			y.append(reshaped_gt.tolist())
+		yield np.array(imgs), np.array(y)
 
 def gen_model():
-	# output shape: (334, 500, 92)
-#     model = VGG19(include_top=False, input_shape=(334, 500, 3))
+	# input shape: (256, 256, 3)
+	model = VGG19(include_top=False, input_shape=(256, 256, 3))
+	for layer in model.layers:
+		layer.trainable = False
 
-	with tf.device("/cpu:0"):
-		# input shape: (428, 640, 92)
-		model = VGG19(include_top=False, input_shape=(428, 640, 3))    
-		for layer in model.layers:
-			layer.trainable = False
-			
-		skip_connection1 = model.layers[-2].output
-		
-		out = Conv2DTranspose(512, (3, 3), strides=(2, 2), activation='relu', padding='same')(model.layers[-1].output)  
-		out = Add()([skip_connection1, out])
-		# out = BatchNormalization()(out)
-		
-		out = Conv2DTranspose(256, (3, 3), strides=(2, 2), activation='relu', padding='same')(out)
-		# out = BatchNormalization()(out)
+	for i in range(5):
+		model.layers.pop()
 
-		out = Conv2DTranspose(128, (3, 3), strides=(2, 2), activation='relu', padding='same')(out)
-		out = ZeroPadding2D((1,0))(out)
-		# out = BatchNormalization()(out)
-		
-		out = Conv2DTranspose(128, (3, 3), strides=(2, 2), activation='relu', padding='same')(out)
-		out = ZeroPadding2D((1,0))(out)
-		
-		skip_connection2 = model.layers[5].output
-		out = Add()([skip_connection2, out])
-		# out = BatchNormalization()(out)
-		   
-		out = Conv2DTranspose(92, (3, 3), strides=(2, 2), activation='relu', padding='same')(out)    
-		seg_model = Model(inputs=model.inputs, outputs=[out])  
+	out = Conv2DTranspose(256, (3, 3), strides=(2, 2), activation='relu', padding='same')(model.layers[-1].output)
+	out = Conv2DTranspose(128, (3, 3), strides=(2, 2), activation='relu', padding='same')(out)
+	out = Conv2DTranspose(128, (3, 3), strides=(2, 2), activation='relu', padding='same')(out)
+
+	skip_connection2 = model.layers[5].output
+	out = Add()([skip_connection2, out])
+
+	out = Conv2DTranspose(92, (3, 3), strides=(2, 2), activation='relu', padding='same')(out)
+	seg_model = Model(inputs=model.inputs, outputs=[out])
 	return seg_model
 
-# gen_model()
-
 def get_model_memory_usage(batch_size, model):
-	import numpy as np
-	from keras import backend as K
-
 	shapes_mem_count = 0
 	for l in model.layers:
 		single_layer_mem = 1
@@ -273,36 +101,18 @@ def get_model_memory_usage(batch_size, model):
 
 print("Memory required for model: {}".format(get_model_memory_usage(10, gen_model())))
 
-
-# In[ ]:
-
-
-# y = np.array([get_ground_truth(coco, 324158, num_classes=92, class_start_id=92)])
-
-
-# In[15]:
-
-
 def pixelwise_crossentropy(y_true, y_pred):
 	reshaped_output = Reshape((-1, 92))(y_pred)
 	new_output = Activation('softmax')(reshaped_output)
 	return categorical_crossentropy(Reshape((-1, 92))(y_true), new_output)
 
-
-# In[29]:
-
-
-# TODO: set steps_per_epoch, validation_steps
-# def train_model(X, y):
-def train_model():  
+def train_model():
+	# Comment this if loading the model from model file
 	model = gen_model()
-#     model.compile('adam', 'mse', ['mae'])
+	# Uncomment this if loading model from model file
+	# model = load_model('./model.h5', custom_objects={'pixelwise_crossentropy': pixelwise_crossentropy})
 
-	# model = Unet(backbone_name='resnet34', encoder_weights='imagenet', input_shape=(428, 640, 3), freeze_encoder=True, classes=92, activation='relu')
-
-	run_opts = tf.RunOptions(report_tensor_allocations_upon_oom=True)
-
-	model.compile(loss=pixelwise_crossentropy, optimizer='adam', options=run_opts)
+	model.compile(loss=pixelwise_crossentropy, optimizer='adam')
 
 	model_path = './model.h5'
 	callbacks = [
@@ -317,74 +127,61 @@ def train_model():
 		mode='min',
 		verbose=0)
 	]
-#     history = model.fit(X, y, epochs=2, batch_size=32, validation_split=0.0, shuffle=True, callbacks=callbacks)
 
 	train_file = 'annotations/stuff_train2017.json'
-	with tf.device("/cpu:0"):
-		coco_train = COCO(train_file)
+	coco_train = COCO(train_file)
 
 	val_file = 'annotations/stuff_val2017.json'
-	with tf.device("/cpu:0"):
-		coco_val = COCO(val_file)
+	coco_val = COCO(val_file)
 
-	training_generator = batch(coco_train, (428, 640, 3), 8)
-	validation_generator = batch(coco_val, (428, 640, 3), 8)
+	training_generator = batch(coco_train, (256, 256, 3), 10)
+	validation_generator = batch(coco_val, (256, 256, 3), 10)
 	history = model.fit_generator(generator=training_generator,
 					validation_data=validation_generator,
-					epochs=3,
+					epochs=15,
 					use_multiprocessing=False,
-					workers=1,
+					workers=0,
 					shuffle=True,
-					steps_per_epoch=10,
-					validation_steps=10,
+					steps_per_epoch=20,
+					validation_steps=20,
 					callbacks=callbacks)
 
 	return model, history
 
-
-# In[ ]:
-
-# In[ ]:
-
-
-# train_model(np.array([I]), y)
-
-
-# # Evaluation
-
-# In[ ]:
-
-
 def convert_pred_to_label_map(pred, class_start_id=92):
 	return class_start_id + np.argmax(pred, axis=2)
 
-
-# In[ ]:
-
-
 def evaluate(val_file):
+	print("Evaluating...")
+
 	cocoGt = COCO(val_file)
-	validation_generator = batch(cocoGt, (428, 640, 3), 5000)
-	images, gt = next(validation_generator)
-	
-	#img = coco.loadImgs([324158])[0]
-	#I = io.imread(img['coco_url'])
+	num_correct = 0
 
-	model = gen_model()    
-	y = model.predict(images)
-	labelMap = convert_pred_to_label_map(y[0])
+	model = gen_model()
 
-	anns = segmentationToCocoResult(labelMap, 324158, stuffStartId=92)   
-	cocoRes = coco.loadRes(anns)
-	coco_eval = COCOStuffeval(cocoGt, cocoRes)
-	coco_eval.params.imgIds = cocoGt.getImgIds()
-	coco_eval.evaluate()
-	coco_eval.summarize()
-	
+	batch_num = 1
+	validation_generator = batch(cocoGt, (256, 256, 3), 10)
+	for images, gt in validation_generator:
+		start = time.time()
+		print("Batch number: {}".format(batch_num))
+		y = model.predict(images)
 
-val_file = 'annotations/stuff_val2017.json'
+		for i in range(y.shape[0]):
+			labelMap_pred = convert_pred_to_label_map(y[i])
+			labelMap_gt = convert_pred_to_label_map(gt[i])
+
+			num_correct = num_correct + len(labelMap_pred == labelMap_gt)
+
+		end = time.time()
+		print("Time taken: {}".format(end - start))
+		batch_num = batch_num + 1
+
+	mean_pix_level_accuracy = num_correct / float(256 * 256 * (batch_num - 1) * 10)
+	return mean_pix_level_accuracy
+
 train_model()
-evaluate(val_file)
+val_file = 'annotations/stuff_val2017.json'
+print("Mean pixel-level accuracy: {}".format(evaluate(val_file)))
 
 
 # In[ ]:
