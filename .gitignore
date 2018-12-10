@@ -3,8 +3,6 @@ annotations/
 test2017/
 train2017/
 val2017/
-results/
 **.zip
 .ipynb_checkpoints/
 .DS_Store
-Image Segmentation-Copy1.ipynb

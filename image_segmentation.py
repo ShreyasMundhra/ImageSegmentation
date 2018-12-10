@@ -2,7 +2,7 @@ import skimage.io as io
 
 from keras import backend as K
 from keras.models import load_model, Model
-from keras.layers import Conv2DTranspose, ZeroPadding2D, Add, Reshape, BatchNormalization
+from keras.layers import Conv2DTranspose, Add, Reshape
 from keras.layers.core import Activation
 
 from keras.losses import categorical_crossentropy
@@ -14,6 +14,7 @@ from pycocotools.coco import COCO
 from pycocotools.cocostuffeval import *
 from pycocotools.cocostuffhelper import *
 
+# get ground truth for an image in the output format of the model
 def get_ground_truth(coco, imgId, num_classes=92, class_start_id=92):
 	label_map = cocoSegmentationToSegmentationMap(coco, imgId, checkUniquePixelLabel=True)
 	ground_truth = np.zeros((label_map.shape[0], label_map.shape[1], num_classes))
@@ -22,6 +23,7 @@ def get_ground_truth(coco, imgId, num_classes=92, class_start_id=92):
 		ground_truth[:, :, i][label_map == class_start_id + i] = 1
 	return ground_truth
 
+# batch generator
 def batch(coco, input_shape, n=32):
 	imgIds = coco.getImgIds()
 
@@ -55,8 +57,8 @@ def batch(coco, input_shape, n=32):
 			y.append(reshaped_gt.tolist())
 		yield np.array(imgs), np.array(y)
 
+# generate neural network model
 def gen_model():
-	# input shape: (256, 256, 3)
 	model = VGG19(include_top=False, input_shape=(256, 256, 3))
 	for layer in model.layers:
 		layer.trainable = False
@@ -72,9 +74,12 @@ def gen_model():
 	out = Add()([skip_connection2, out])
 
 	out = Conv2DTranspose(92, (3, 3), strides=(2, 2), activation='relu', padding='same')(out)
+
+	# input shape: (256, 256, 3), output shape: (256, 256, 92)
 	seg_model = Model(inputs=model.inputs, outputs=[out])
 	return seg_model
 
+# get an estimated memory usage for the model in GB
 def get_model_memory_usage(batch_size, model):
 	shapes_mem_count = 0
 	for l in model.layers:
@@ -89,7 +94,6 @@ def get_model_memory_usage(batch_size, model):
 	non_trainable_count = np.sum([K.count_params(p) for p in set(model.non_trainable_weights)])
 
 	number_size = 4.0
-	print("Floatx: ", K.floatx())
 	if K.floatx() == 'float16':
 		number_size = 2.0
 	if K.floatx() == 'float64':
@@ -99,13 +103,13 @@ def get_model_memory_usage(batch_size, model):
 	gbytes = np.round(total_memory / (1024.0 ** 3), 3)
 	return gbytes
 
-print("Memory required for model: {}".format(get_model_memory_usage(10, gen_model())))
-
+# custom loss function for pixelwise crossentropy
 def pixelwise_crossentropy(y_true, y_pred):
 	reshaped_output = Reshape((-1, 92))(y_pred)
 	new_output = Activation('softmax')(reshaped_output)
 	return categorical_crossentropy(Reshape((-1, 92))(y_true), new_output)
 
+# train model
 def train_model():
 	# Comment this if loading the model from model file
 	model = gen_model()
@@ -148,9 +152,12 @@ def train_model():
 
 	return model, history
 
+# convert output format of model to label map
+# each item in the label map is the label of its corresponding pixel in the image
 def convert_pred_to_label_map(pred, class_start_id=92):
 	return class_start_id + np.argmax(pred, axis=2)
 
+# evaluate model
 def evaluate(val_file):
 	print("Evaluating...")
 
@@ -179,13 +186,8 @@ def evaluate(val_file):
 	mean_pix_level_accuracy = num_correct / float(256 * 256 * (batch_num - 1) * 10)
 	return mean_pix_level_accuracy
 
-train_model()
-val_file = 'annotations/stuff_val2017.json'
-print("Mean pixel-level accuracy: {}".format(evaluate(val_file)))
-
-
-# In[ ]:
-
-
-# evaluate(coco)
-
+if __name__ == "__main__":
+	print("Memory required for model: {} GB".format(get_model_memory_usage(10, gen_model())))
+	train_model()
+	val_file = 'annotations/stuff_val2017.json'
+	print("Mean pixel-level accuracy: {}".format(evaluate(val_file)))
